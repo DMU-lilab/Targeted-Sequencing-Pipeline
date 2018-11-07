@@ -1,6 +1,6 @@
 # Targeted-sequencing Pipeline 
 ## This is a pipeline for the targetsequencing of 48 cancer-ralated gene
-### Time:2018.06.01
+### Time:2018.11.07
 ##
 ## What u need ?
 #### Softwore: FastQC,P-trimmer[coding by xlzh],Samtools,BWA,Varscan...
