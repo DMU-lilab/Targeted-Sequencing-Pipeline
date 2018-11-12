@@ -9,6 +9,7 @@
 ##                           -o outpath                                               ##
 ########################################################################################
 
+
 library(data.table)
 library(reshape2)
 library(ggplot2)
@@ -16,7 +17,7 @@ library(optparse)
 library(gridExtra)
 
 
-Transtable <- function(pathfile){
+Transtable <- function(pathfile, pri_path){
  ### 读入文件
   table_all <- fread(pathfile, sep="\t", header=T)
  ### 转变格式
@@ -24,98 +25,62 @@ Transtable <- function(pathfile){
  ### 分割列
   list_v <- strsplit(as.character(table_m$variable), "_")
   list_v <- data.frame(do.call(rbind, list_v))
-  table_m[,':='(Sample=list_v$X1, Type=list_v$X2, df=list_v$X3)]
+  table_m[,':='(Patients=list_v$X1, Type=list_v$X2, df=list_v$X3)]
  ### 转变格式
-  table_f <- dcast(table_m, Chrom+Pos+Sample+Type~df, value.var = "value")
+  table_f <- dcast(table_m, Chrom+Pos+Patients+Type~df, value.var = "value")
  ### 重新排序
-  table_f <- data.table(table_f)[,c(1,2,3,5,6,4)]	
-  return(table_f)
-}
-
-
-Data_combine <- function(table, pri_path){
- ## 读入primer文件
+  table_f <- data.table(table_f)[,c(1,2,3,5,6,4)]
+  colnames(table_f)[1] <- "Chr"
+### 输入primer信息
   primer <- fread(pri_path,sep="\t",header=T)
- ## Chr Pos Sample Depth Freq Type
- ## 先把Chrom Pos 取出，unique，比对到primer文件，生成需要的注释
-  Depth_Freq_All_Samp <- table
-  Chr_Pos <- unique(Depth_Freq_All_Samp[,.(Chr,Pos)])
-  setkey(primer,"Chr")
-  setkey(Chr_Pos,"Chr","Pos")
-  dt_lst <- list()
-  for (chrI in unique(primer[["Chr"]])){
-    dt_pos_chr <- Chr_Pos[chrI,]
-    dt_insert_chr <- primer[chrI,]
-    dt_primer_chr <-  rbind(dt_insert_chr[,.(Chr,Amplicon_Start,Insert_Start-1,Ampl,Gene,PrDir="F")],dt_insert_chr[,.(Chr,Insert_Stop+1,Amplicon_Stop,Ampl,Gene,PrDir="R")],use.names=FALSE)
-    setnames(dt_primer_chr,c("Chr","Start","End","Ampl","Gene","Prdir"))
-    dt_primer_chr <- rbind(dt_primer_chr,data.table(chrI,0,0,"NA","NA","NA"),use.names=FALSE) #将yid中的NA，替换自定义列的列号，以便下一步的运行
-    setkey(dt_primer_chr,"Chr","Start","End")
-    rg_pos <- dt_pos_chr[,.(Start=Pos,End=Pos)]
-    rg_insert <- dt_insert_chr[,.(Insert_Start,Insert_Stop)]
-    rg_primer <- dt_primer_chr[,.(Start,End)]
-    setkey(rg_pos,"Start","End")
-    setkey(rg_insert,"Insert_Start","Insert_Stop")
-    setnames(rg_primer,c("Start","End"))
-    setkey(rg_primer,"Start","End")
-    dt_pos_insert_overl <- foverlaps(rg_pos, rg_insert, which=TRUE,nomatch=0)
-    dt_pos_insert <- unique(data.table(dt_pos_chr[dt_pos_insert_overl[["xid"]],],Gene=dt_insert_chr[["Gene"]][dt_pos_insert_overl[["yid"]]],Ampl1=dt_insert_chr[["Ampl"]][dt_pos_insert_overl[["yid"]]],Ampl2=as.character(NA)))
-    torm <- list()
-    for (i in 1:(nrow(dt_pos_insert)-1)){if(dt_pos_insert[i,"Pos"]==dt_pos_insert[i+1,"Pos"]){set(dt_pos_insert,i,ncol(dt_pos_insert),dt_pos_insert[i+1,"Ampl1"]);torm <- c(torm,list(i+1))}}
-    torm <- unlist(torm)
-    dt_pos_insert <- dt_pos_insert[-torm,]
-    setkey(dt_pos_insert,"Chr","Pos")
-    rg_pos_insert <- dt_pos_insert[,.(Start=Pos,End=Pos)]
-    setkey(rg_pos_insert)
-    dt_pos_insert_primer_overl <- foverlaps(rg_pos_insert, rg_primer, which=TRUE,nomatch=NA)
-    dt_pos_insert_primer_overl[is.na(yid),yid:=as.integer(row.names(dt_primer_chr[Ampl=="NA"]))]
-    dt_pos_insert_primer <- unique(data.table(dt_pos_insert[dt_pos_insert_primer_overl[["xid"]]],Prdir1=dt_primer_chr[["Prdir"]][dt_pos_insert_primer_overl[["yid"]]],Prdir2=as.character(NA),Primer1=dt_primer_chr[["Ampl"]][dt_pos_insert_primer_overl[["yid"]]],Primer2=as.character(NA)))
-    for (i in 1:(nrow(dt_pos_insert_primer)-1)){if(dt_pos_insert_primer[i,"Pos"]==dt_pos_insert_primer[i+1,"Pos"] & dt_pos_insert_primer[i,"Primer1"] != 1){set(dt_pos_insert_primer,i,ncol(dt_pos_insert_primer),dt_pos_insert_primer[i+1,"Primer1"]);set(dt_pos_insert_primer,i,7L,dt_pos_insert_primer[i+1,"Prdir1"]);torm <- c(torm,list(i+1))}}
-  # add PrStart and Pr End
-    tmp1 <- merge(dt_pos_insert_primer, dt_primer_chr, all.x=T, by.x=c("Primer1","Prdir1"), by.y=c("Ampl","Prdir"), allow.cartesian=TRUE)
-    setnames(tmp1,c("Start","End","Chr.x","Gene.x"),c("PrStart1","PrEnd1","Chr","Gene"))
-    tmp1$Chr.y <- NULL
-    tmp1$Gene.y <- NULL
-    tmp2 <- merge(tmp1, dt_primer_chr, all.x=T, by.x=c("Primer2","Prdir2"), by.y=c("Ampl","Prdir"), allow.cartesian=TRUE)
-    setnames(tmp2, c("Start", "End", "Chr.x", "Gene.x"), c("PrStart2", "PrEnd2", "Chr", "Gene"))
-    tmp2$Chr.y <- NULL
-    tmp2$Gene.y <- NULL
-  # add Primer 5’ Postion
-    tmp2[Prdir1=="F", Pr5Pos1:=Pos-PrStart1+1]
-    tmp2[Prdir1=="R", Pr5Pos1:=PrEnd1-Pos+1]
-    tmp2[Prdir2=="F", Pr5Pos2:=Pos-PrStart2+1]
-    tmp2[Prdir2=="R", Pr5Pos2:=PrEnd2-Pos+1]
-  
-    dt_pos_insert_primer <- tmp2[,.(Chr=Chr, Pos=Pos, Gene=Gene, Ampl1=Ampl1, Ampl2=Ampl2, Primer1=Primer1, Prdir1=Prdir1, PrStart1=PrStart1, PrEnd1=PrEnd1, Pr5Pos1=Pr5Pos1, Primer2=Primer2, Prdir2=Prdir2, PrStart2=PrStart2, PrEnd2=PrEnd2, Pr5Pos2=Pr5Pos2)]
-    dt_lst[[chrI]] <- dt_pos_insert_primer
-  }
-  dt_all_pos <- rbindlist(dt_lst)
-  #再将添加Ampl和Primer的Chr,Pos merge回去原来的大数据框
-  Depth_Freq_All_Samp_Primer <- merge(Depth_Freq_All_Samp, dt_all_pos,by=c("Chr","Pos"), all.y=TRUE)
-  return(Depth_Freq_All_Samp_Primer)
+  pn <- primer[,.(Chr=Chr, Pos=seq(Insert_Start, Insert_Stop)),by=c("Gene","AMPN")]
+### 合并
+  newt <- merge(table_f, pn, by=c("Chr", "Pos"))
+  return(newt)
 }
-
 
 #################################
 ## Amplicon Information  ##
 ## Creat a summary table ##
 ###########################	
-Amp_Table <- function(amp_path){
-        Amp_count <- list.file(amp_path)
-        Amp <- data.frame()
+Amp_Table <- function(amp_path, Primer){
+    ## 读入primer文件，并转换格式
+	primer <- fread(Primer, sep="\t", header=T)
+	pm <- primer[,.(AuxInfo=paste(Gene, Chr, Amplicon_Start, 
+	                              Insert_Start, Insert_Stop, 
+	                              Amplicon_Stop,sep=",")),by=c("AMPN","Gene")]
+######> pm
+##	AMPN    Gene                                           AuxInfo
+##	1:     MPL-A01     MPL      MPL,chr1,43337816,43337835,43337933,43337953
+##	2:     MPL-A02     MPL      MPL,chr1,43338041,43338062,43338145,43338168
+##	3:     MPL-A03     MPL      MPL,chr1,43338088,43338112,43338201,43338223
+##	4:     MPL-A04     MPL      MPL,chr1,43338510,43338532,43338623,43338646
+##	5:     MPL-A05     MPL      MPL,chr1,43338595,43338615,43338711,43338734
+##	---                                                                      
+##	2154: SMARCB1-A19 SMARCB1 SMARCB1,chr22,23825301,23825322,23825417,23825439
+##	2155: SMARCB1-A20 SMARCB1 SMARCB1,chr22,23825385,23825407,23825491,23825516
+##	2156: SMARCB1-A21 SMARCB1 SMARCB1,chr22,23833531,23833555,23833647,23833668
+##  2157: SMARCB1-A22 SMARCB1 SMARCB1,chr22,23833560,23833578,23833674,23833692
+##  2158: SMARCB1-A23 SMARCB1 SMARCB1,chr22,23834064,23834084,23834176,23834196
+	####
+  Amp_count <- list.files(amp_path)
+  Amp <- data.frame()
      ## 整合所有Amplicon文件
         for ( i in Amp_count){
-            amp_e <- fread(amp_path"/"i, sep="\t", header=T)
+            amp_e <- fread(paste(amp_path,i,sep="/"), sep="\t", header=T)
             amp_e$Sample <- sub(".count", "", i) 
             Amp <- rbind(Amp, amp_e)
         }
-     ## sp  <- strsplit(Amp$AuxInfo, "_")
-     ## sp  <- data.frame(do.call(rbind,sp))	
-        Amall <- data.frame(do.call(rbind, strsplit(Amp$AuxInfo,",")))
-        colnames(Amall) <- c("Gene", "Chr", "FP", "IS", "IE", "RP")
-        Amp <- cbind(Amp, Amall)
-        Amp[, AuxInfo := NULL]
-        Amp[,':='(Log2=round(log(AmpCount+1,2),2), Log10=round(log(AmpCount+1,10),2))]
-        return(Amp)
+     ##
+  Amp[,':='(Log2=round(log(AmpCount+1,2),2), Log10=round(log(AmpCount+1,10),2))]
+     ##
+	Amall2 <- data.frame(do.call(rbind,strsplit(as.character(Amp$Sample), "_")))
+	colnames(Amall2) <- c("Patients", "Type")
+	Amp <- cbind(Amp, Amall2)
+	Amp[, Sample := NULL]
+     ##
+	m <- merge(Amp,pm,by=c("AuxInfo"))
+  return(m)
 } 
  
 ############################################################
@@ -124,22 +89,23 @@ Amp_Table <- function(amp_path){
 ###################################################
 Amp_Draw <- function(AMP){
 	## Boxplot
-	Amp_boxplot <- ggplot(AMP,aes(Type,Log2,fill=Type)) + geom_boxplot() +
+	Amp_boxplot <- ggplot(AMP,aes(Gene,Log2,fill=Gene)) + geom_boxplot() +
 		#scale_x_discrete(limits=c("WBC","cfDNA1","cfDNA2","cfDNA3","tissue")) + 
-		ggtitle("Amplicon Depth") + xlab("x-axis") + ylab("y-axis") +
-		guides(fill=guide_legend(title="Legend_Title")) + ylim(5,15)
+		ggtitle("Amplicon Depth") + xlab("Gene") + ylab("Log2 value") +
+	  theme(axis.text.x = element_text(angle=90, hjust = 1, vjust = 1)) +
+	  guides(fill = FALSE) + ylim(5,15)
 	## Violoin
-	Amp_violin <- ggplot(AMP,aes(Type,log2,fill=Type)) + geom_violin() +
+	Amp_violin <- ggplot(AMP,aes(Type,Log2,fill=Type)) + geom_violin() +
 		#scale_x_discrete(limits=c("WBC","cfDNA1","cfDNA2","cfDNA3","tissue")) +
 		ggtitle("Amplicon Depth") + xlab("Type") + ylab("Amplicon Depth") +
 		guides(fill=guide_legend(title="Legend_Title")) +
 		theme(panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank())
 	## Histogram
-	Amp_histogram <- ggplot(AMP,aes(log2,fill=Type)) + geom_histogram(bins=90) +
-		ggtitle("Amplicon Depth Distribution") + xlab("AmpliconDepth") + ylab("Count") + 
+	Amp_histogram <- ggplot(AMP,aes(Log2,fill=Type)) + geom_histogram(bins=90) +
+		ggtitle("Amplicon Depth") + xlab("AmpliconDepth") + ylab("Count") + 
 		guides(fill=guide_legend(title="Legend_Title")) + 
 		theme(panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank()) + 
-		facet_grid(~Type)
+		facet_grid(~Patients)
 	return(grid.arrange(Amp_boxplot,Amp_violin,Amp_histogram,nrow=2,ncol=2))
 }
 
@@ -147,17 +113,20 @@ Amp_Draw <- function(AMP){
 ### Allele Fraction : Scatter plot; ECDF ##
 ###########################################
 AF_Draw <- function(AF){
-	## Scatterplot
-	AF_scatter <- ggplot(AF, aes(Type, Freq, colour=Type)) + geom_jitter() +
+	  ## Scatterplot
+	AF_scatter <- ggplot(unique(AF[,1:7]), aes(Type, Freq, colour=Type)) + geom_jitter() +
 		ggtitle("AllSample Allele Frequency") + xlab("Type") + ylab("Allele Frequency") +
 		#scale_color_manual(values = c("red","blue","orange","green","black"))+
+	  theme_bw() +
 		theme(panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank())
-	## ECDF plot
+	
+    ## ECDF plot
 	AF_ecdf <- ggplot(AF,aes(Freq,colour=Type)) + stat_ecdf() + ylim(0.999,1) +
-		facet_wrap(~Classification) +
 		ggtitle("AllSample ECDF") + xlab("allele frequency") + ylab("") +
-		scale_x_continuous(breaks=seq(0, 100, by=25)) + 
-		#scale_color_manual(values = c("red","blue","orange","green","black"))
+		scale_x_continuous(breaks=seq(0, 100, by=25)) +
+	  theme_bw()+
+	  theme(panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank())
+		##
 	return(grid.arrange(AF_scatter,AF_ecdf,nrow=1))
 }
 ###################################
@@ -172,27 +141,28 @@ option_list <- list(
 )
 
 ## Get command line options
-        arguments <- parse_args(OptionParser(usage = "%prog [options] ", option_list = option_list), positional_arguments = 0)
-        opt <- arguments$options
+      arguments <- parse_args(OptionParser(usage = "%prog [options] ", option_list = option_list), positional_arguments = 0)
+      opt <- arguments$options
 
         ##
-        Input <- opt$`input-file`
-        Primer <- opt$`primer-file`
-	amp_path <- opt$`amplicon-path`
-        Output <- opt$`output-path`
+      Input <- opt$`input-file`
+      Primer <- opt$`primer-file`
+	    amp_path <- opt$`amplicon-path`
+      Output <- opt$`output-path`
         ## Amp_path <- opt$`amp_path`
        
 	## save data:allsites and amplicon
-        m <- Data_combine(Transtable(Input), Primer)
-	n <- Amp_Table(amp_path)
-        save(m, file=Output"/Site.R")
-	save(n, file=Output"/Amplicon.R")
+      m <- Transtable((Input), Primer)
+	    n <- Amp_Table(amp_path, Primer)
+      save(m, file=paste0(Output,"/Site.R"))
+	    save(n, file=paste0(Output,"/Amplicon.R"))
 	
-	### draw picture
-        pdf(Output"/AF.pdf"), width = 10, height = 5)
-	AF_Draw(m)
-	dev.off()
-	###
-	pdf(Output"/Amplicon.pdf"), width = 10, height = 5)
-	Amp_Draw(n)
-	dev.off()
+	### draw picture of Allele frequency
+     pdf(paste0(Output,"/AF.pdf"), width = 12, height = 8)
+	   AF_Draw(m)
+	   dev.off()
+	### draw picture of AmpliconCount
+	   pdf(paste0(Output,"/Amplicon.pdf"), width = 10, height = 5)
+	   Amp_Draw(n)
+	   dev.off()
+
