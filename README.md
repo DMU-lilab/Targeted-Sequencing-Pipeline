@@ -18,11 +18,12 @@
 ### Result: 
 #### 1. Basic Pictures about AlleleFrequency and AmpliconDepth, 
 #### 2. Basic Rdata about AF and Amplicon.
-#### 3. If you want to call SNV, you can input the outputing final BAM files as an input for PlasamMutationDetector.
+#### 3. If you want to call SNV, you can input the outputing final BAM files as an input for PlasamMutatio  nDetector.
 ##
 ## Usage
 ## bash TargetPanel.sh In Index Ref Out
-## 
+## Notice: Absolute path
+##  
 #### In: The input path which including all the rowdata of fastq.Formation: XXX_cfDNA_R1.fq.gz, XXX_cfDNA_R2.fq.gz
 #### Index: The mapping index of reference genome
 #### Ref: The reference genome
